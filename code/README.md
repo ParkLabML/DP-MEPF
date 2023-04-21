@@ -85,23 +85,3 @@ non-DP
 DP
 `python3.9 dp_mepf.py --pytorch_encoders --n_iter 200_000 --valid_iter 5_000 --restart_iter 5_000 --syn_eval_iter 5_000 --dataset cifar10 --val_enc fid_features --val_data train --validation_mode static --exp_name cifar10_results_dp/run_0 --dp_tgt_eps 0.2 --matched_moments m1_and_m2 --dp_val_noise_scaling 10. --batch_size 128 --lr 1e-3 --m_avg_lr 3e-4 --seed 1`
 
-
-#### f) DP-MERF
-
-non-DP
-`python3 dp_merf_cifar.py  --log-interval 1000 --d-code 90 --log-name dpmerf_res/run_0 --batch-size 64 --d-rff 50000 --rff-sigma 1000. --lr 1e-3 --scheduler-interval 10000   --seed 1`
-
-DP
-`python3 dp_merf_cifar.py  --log-interval 1000 --d-code 90 --log-name dpmerf_res/run_9 --batch-size 64 --d-rff 50000 --rff-sigma 1000. --lr 1e-3 --scheduler-interval 10000  --tgt-eps 2 --seed 1`
-
-
-#### g) DP-GAN
-
-Imagenet pre-training
-`python3.9 dcgan_baseline_backpack.py --model resnet --data imagenet32  --exp_name sep28_dcgan_resnet_bp_imagenet32/run_1 --batch_size 64 --lr_gen 3e-5 --lr_dis 1e-5 --n_epochs 30`
-
-CelebA
-`python3.9 dcgan_baseline_backpack.py --model resnet --data celeba --local_data --pretrain_exp sep28_dcgan_resnet_bp_imagenet32/run_1 --exp_name dcgan_celeba_res/run_0 --batch_size 512 --lr_gen 3e-4 --lr_dis 3e-4 --n_epochs 10 -gen_freq 10 --clip_norm 1e-5 --target_eps 0.2 --seed 1`
-
-Cifar10
-`python3.9 dcgan_baseline_backpack.py --model resnet --data cifar10 --batch_size_grad_acc 64 --local_data --pretrain_exp sep28_dcgan_resnet_bp_imagenet32/run_1 --exp_name dpgan_cifar10_res/run_0 --batch_size 512 --lr_gen 1e-4 --lr_dis 1e-3 --n_epochs 10 -gen_freq 10 --clip_norm 1e-5 --target_eps 0.2 --seed 1`

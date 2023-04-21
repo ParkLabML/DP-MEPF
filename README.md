@@ -13,4 +13,3 @@ The code is based on the implementation for Generative Feature Matching Networks
 - `data/` is the default path for datasets
 - `logs/` is the default path for experiment logs
 - `requirements.txt` lists the required packages
-- 

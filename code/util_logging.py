@@ -11,7 +11,7 @@ from filelock import Timeout, FileLock
 from eval_accuracy import synth_to_real_test
 from eval_fid import get_fid_scores
 from eval_prdc import get_prdc
-from svhn_mnist.synth_data_benchmark import prep_models, model_test_run
+from mnist_synth_data_benchmark import prep_models, model_test_run
 LOG = colorlog.getLogger(__name__)
 
 

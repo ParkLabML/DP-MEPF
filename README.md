@@ -1,4 +1,10 @@
 # Differentially Private Mean Embeddings with Perceptual Features (DP-MEPF) 
+  
+# Disclaimer: Error in FID eval - subject to change
+### This code currently contains an error in the FID evaluation, which affects tables 3, 4 and 5 in the paper and tables 12, 13, 14, 18, and 19 in the supplementary material.
+### We are working on correcting this error and will upload a new version of the code along with updated results whithin the next few weeks. Please do not rely on the provided FID evaluation while this disclaimer is up.
+
+
 
 This is the code for the paper **Pre-trained Perceptual Features Improve Differentially Private Image Generation** by Frederik Harder, Milad Jalali, Danica J. Sutherland and Mijung Park, published in TMLR (https://openreview.net/forum?id=R6W7zkMz0P).
 

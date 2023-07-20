@@ -5,7 +5,7 @@ import numpy as np
 import torch as pt
 from dp_analysis import find_single_release_sigma, find_two_release_sigma, \
   find_train_val_sigma_m1, find_train_val_sigma_m1m2
-from data_loading import IMAGENET_MEAN, IMAGENET_SDEV
+
 from util_logging import get_base_log_dir
 from typing import NamedTuple
 
@@ -14,8 +14,7 @@ def get_args():
   parser = argparse.ArgumentParser()
 
   # PARAMS YOU LIKELY WANT TO SET
-  parser.add_argument('--dataset', default='cifar10', choices=['cifar10', 'lsun', 'celeba',
-                                                               'dmnist', 'fmnist'])
+  parser.add_argument('--dataset', default='cifar10', choices=['dmnist', 'fmnist'])
   parser.add_argument('--n_iter', type=int, default=100_000, help='number of generator updates')
   parser.add_argument('--n_gpu', type=int, default=1, help='number of GPUs to use')
   parser.add_argument('--net_enc', nargs='*', default=['models/vgg19.pt'],
@@ -30,27 +29,19 @@ def get_args():
                       help='folder to output images and model checkpoints')
   parser.add_argument('--labeled', action='store_true', help='enables labeled data generation')
   parser.add_argument('--pretrain_dataset', default=None,
-                      choices=[None, 'imagenet', 'svhn', 'cifar10_pretrain'], help='set automatically')
+                      choices=[None, 'imagenet', 'svhn', 'cifar10'], help='set automatically')
 
-  parser.add_argument('--gen_output', type=str, default='tanh', choices=['tanh', 'linear'],
+  parser.add_argument('--gen_output', type=str, default='linear', choices=['tanh', 'linear'],
                       help='tanh: output in range [-1,1]. linear: output unbounded')
-  parser.add_argument('--data_scale', type=str, default='0_1', choices=['bounded', 'normed', '0_1'],
+  parser.add_argument('--data_scale', type=str, default='normed', choices=['bounded', 'normed'],
                       help='bounded: in range [-1,1]. normed: scaled to imagenet mean and var')
+
+  parser.add_argument('--pytorch_encoders', action='store_true',
+                      help="Use torchvision model encoders rather than the ones from the paper")
+  parser.add_argument('--select_on_train_data', action='store_true',
+                      help="if true, use train data for feature selection (debug mode)")
   parser.add_argument('--keep_best_syn_data', action='store_true',
                       help="if true, don't delete highest scoring synthetic dataset")
-  parser.add_argument('--extra_input_scaling', type=str, default='none',
-                      choices=['dataset_norm', 'imagenet_norm', 'none'],
-                      help='if true and data in scale 0_1, rescale to norm for encoder')
-
-  # ways to shortcut some data loading and eval
-  parser.add_argument('--n_features_in_enc', type=int, default=None,
-                      choices=[None, 303104, 1212416],  # vgg19 at 32x32 and at 64x64
-                      help='hardcode number of feats so it doesnt have to be computed using data')
-  parser.add_argument('--n_classes', type=int, default=None,
-                      choices=[None, 0, 10],
-                      help='hardcode number of classes so it doesnt have to be computed using data')
-  parser.add_argument('--skip_prdc', action='store_true',
-                      help="if true, don't compute prdc scores to save time")
 
   # MOMENT MATCHING OPTIONS
   parser.add_argument('--matched_moments', type=str, default='m1_and_m2',
@@ -59,6 +50,19 @@ def get_args():
                            'm1_and_m2 matches first and second moment')
   parser.add_argument('--n_split_layers', type=int, default=None,
                       help='if set, use only n last layers for class-conditional embedding')
+
+  # FEATURE SELECTION
+  parser.add_argument('--channel_filter_rate', type=float, default=1.,
+                      help='fraction of channels in each layer to keep')
+  parser.add_argument('--channel_filter_mode', type=str, default="maxnorm",
+                      help='how to select channels')
+  parser.add_argument('--n_filter_select_batches', type=int, default=10,
+                      help='#batches to use for selecting the pruned features')
+  parser.add_argument('--hsic_block_size', type=int, default=100, help='')
+  parser.add_argument('--hsic_reps', type=int, default=3, help='')
+  parser.add_argument('--hsic_max_samples', type=int, default=100_000, help='')
+  parser.add_argument('--n_pca_iter', type=int, default=10,
+                      help='number of iterations for randomized PCA to converge')
 
   # PRIVACY PARAMS
   parser.add_argument('--dp_tgt_eps', type=float, default=None,
@@ -88,14 +92,13 @@ def get_args():
                       help="Number of batches after which the model is saved into a NEW file.")
   parser.add_argument('--ckpt_iter', type=int, default=10_000,
                       help="Number of epochs after which the model is saved (to the same file).")
+  parser.add_argument('--valid_iter', type=int, default=10_000,
+                      help='Number of batches after which the validation is applied')
   parser.add_argument('--syn_eval_iter', '--fid_log_steps', type=int, default=500_000,
                       help='create fid score every n iterations')
   parser.add_argument('--load_generator', type=str, default='if_exists',
                       choices=['False', 'True', 'if_exists'],
                       help='whether to load a generator (i.e. continue run)')
-  parser.add_argument('--local_fid_eval_storage', type=str, default='/tmp/',
-                      help='if not none, store syn data on local machine first for quicker access')
-
 
   # FID SCORE AND SYNTH DATA
   parser.add_argument('--synth_dataset_size', type=int, default=None,
@@ -106,16 +109,21 @@ def get_args():
                       help="create a dataset of at least this size after training if labeled")
 
   # VALIDATION AND EARLY STOPPING
-  parser.add_argument('--val_enc', nargs='*', default=('fid_features',),
+  parser.add_argument('--validation_mode', type=str, default='off',
+                      choices=['off', 'mavg', 'static'],
+                      help="enables static of moving average validation loss")
+  parser.add_argument('--val_enc', nargs='*', default=None,
                       help='if not none, choose separate enoder for val loss i.e. fid_features')
-  parser.add_argument('--val_data', type=str, default='train',
+  parser.add_argument('--val_data', type=str, default=None,
+                      choices=['test', 'train', 'split'],
                       help='data to use for validation. test set, train set or split train set')
   parser.add_argument('--dp_val_noise', type=float, default=None, help='noise for gm')
-  parser.add_argument('--dp_val_noise_scaling', type=float, default=10.,
+  parser.add_argument('--dp_val_noise_scaling', type=float, default=2.,
                       help='noise scale relative to noise used in training (likely higher)')
 
   # TURN OFF FUNCTIONALY THAT IS ON BY DEFAULT
   parser.add_argument('--no_io_files', action='store_true', help='disables logging to files')
+  parser.add_argument('--no_cuda', action='store_true', help='disables cuda')
   parser.add_argument('--no_tensorboard', action='store_true', help="disables tensorboard logs")
 
   parser.add_argument('--do_embedding_norms_analysis', action='store_true',
@@ -148,6 +156,9 @@ def get_args():
                       help='Term used to balance the trade-off in the regular moving average.')
   parser.add_argument('--m_avg_lr', type=float, default=1e-5,
                       help='Learning rate for moving average, default=0.0002')
+  parser.add_argument('--update_type', type=str, default='adam_ma',
+                      choices=['adam_ma', 'regular_ma', 'no_ma'],
+                      help="Use regular moving average instead of Adam-based moving average")
   parser.add_argument('--n_classes_in_enc', type=int, default=1_000,
                       help="Number of classes in the feature extractor classifier.")
   # DE FACTO CONSTANTS HAVE BEEN MOVED TO model_builder.model_constants()
@@ -174,20 +185,36 @@ def get_args():
 def set_dp_noise(arg, log_messages):
   assert arg.dp_tgt_delta is not None, 'tgt_delta must be set to calculate noise'
   assert arg.dp_noise is None, "Don't set dp_noise if setting dp_target_eps!"
-
-  if arg.matched_moments == 'mean':
-    eps, sig_t, sig_v = find_train_val_sigma_m1(arg.dp_tgt_eps, arg.dp_tgt_delta,
-                                                arg.dp_val_noise_scaling)
-  elif arg.matched_moments == 'm1_and_m2':
-    eps, sig_t, sig_v = find_train_val_sigma_m1m2(arg.dp_tgt_eps, arg.dp_tgt_delta,
-                                                  arg.dp_scale_var_sigma,
-                                                  arg.dp_val_noise_scaling)
-  else:
+  if arg.validation_mode == 'off':
+    if arg.matched_moments == 'mean':
+      eps, sig = find_single_release_sigma(arg.dp_tgt_eps, arg.dp_tgt_delta)
+    elif arg.matched_moments == 'm1_and_m2':
+      eps, sig = find_two_release_sigma(arg.dp_tgt_eps, arg.dp_tgt_delta, arg.dp_scale_var_sigma)
+    else:
       raise NotImplementedError(f'matched moments {arg.matched_moments} not supported yet')
-  log_messages.append(('info', f'Target eps ({arg.dp_tgt_eps}): using sig={sig_t, sig_v} '
-                               f'gives ({eps}, {arg.dp_tgt_delta})-DP'))
-  arg.dp_noise = sig_t
-  arg.dp_val_noise = sig_v
+    log_messages.append(('info', f'Target eps ({arg.dp_tgt_eps}): using sig={sig} gives ({eps}, '
+                                 f'{arg.dp_tgt_delta})-DP'))
+    arg.dp_noise = sig
+  elif arg.val_data == 'train':
+    if arg.matched_moments == 'mean':
+      eps, sig_t, sig_v = find_train_val_sigma_m1(arg.dp_tgt_eps, arg.dp_tgt_delta,
+                                                  arg.dp_val_noise_scaling)
+    elif arg.matched_moments == 'm1_and_m2':
+      eps, sig_t, sig_v = find_train_val_sigma_m1m2(arg.dp_tgt_eps, arg.dp_tgt_delta,
+                                                    arg.dp_scale_var_sigma,
+                                                    arg.dp_val_noise_scaling)
+    else:
+      raise NotImplementedError(f'matched moments {arg.matched_moments} not supported yet')
+    log_messages.append(('info', f'Target eps ({arg.dp_tgt_eps}): using sig={sig_t, sig_v} '
+                                 f'gives ({eps}, {arg.dp_tgt_delta})-DP'))
+    arg.dp_noise = sig_t
+    arg.dp_val_noise = sig_v
+  elif arg.validation_mode == 'test':
+    raise NotImplementedError
+  elif arg.validation_mode == 'split':
+    raise NotImplementedError
+  else:
+    raise ValueError
 
 
 def set_arg_dependencies(arg):
@@ -245,8 +272,8 @@ def set_arg_dependencies(arg):
                           'dmnist': 'svhn', 'fmnist': 'cifar10_pretrain'}
   if arg.pretrain_dataset is None:
     arg.pretrain_dataset = pretrain_assignments[arg.dataset]
-  # else:
-  #   assert arg.pretrain_dataset == pretrain_assignments[arg.dataset]
+  else:
+    assert arg.pretrain_dataset == pretrain_assignments[arg.dataset]
 
   if arg.dataset in {'dmnist', 'fmnist'}:
     arg.net_gen_type = 'condconvgen'
@@ -257,13 +284,22 @@ def set_arg_dependencies(arg):
 
   if arg.val_enc is not None:  # pruning and layer splitting not supported
     assert arg.n_split_layers is None
+    assert arg.channel_filter_rate == 1.
+    assert arg.val_data in {'train', 'test'}
+    assert arg.valid_iter == arg.syn_eval_iter
+
+  if arg.net_gen_type.startswith('static'):
+    dset_samples = int(arg.net_gen_type[len('static'):])
+    assert dset_samples == arg.batch_size
+    assert arg.dataset == 'cifar10'
+    assert arg.labeled
 
   return log_messages
 
 
 def get_imagenet_norm_min_and_range(device):
-  imagenet_norm_mean = np.asarray(IMAGENET_MEAN, dtype=np.float32)
-  imagenet_norm_std = np.asarray(IMAGENET_SDEV, dtype=np.float32)
+  imagenet_norm_mean = np.asarray([0.485, 0.456, 0.406], dtype=np.float32)
+  imagenet_norm_std = np.asarray([0.229, 0.224, 0.225], dtype=np.float32)
   imagenet_norm_min = -imagenet_norm_mean / imagenet_norm_std
   imagenet_norm_max = (1.0 - imagenet_norm_mean) / imagenet_norm_std
   imagenet_norm_range = imagenet_norm_max - imagenet_norm_min
@@ -291,8 +327,9 @@ class EventSteps(NamedTuple):
   restart: int
   ckpt: int
   new_ckpt: int
+  valid: int
   tb_log: int
-  eval: int
+  syn_eval: int
 
 
 def get_param_group_tuples(ar):
@@ -303,5 +340,5 @@ def get_param_group_tuples(ar):
                            ar.dp_mean_bound, ar.dp_var_bound, ar.dp_sens_bound_type,
                            ar.dp_scale_var_sigma)
   event_steps = EventSteps(ar.n_iter, ar.restart_iter, ar.ckpt_iter, ar.new_ckpt_iter,
-                           ar.tensorboard_log_iter, ar.syn_eval_iter)
+                           ar.valid_iter, ar.tensorboard_log_iter, ar.syn_eval_iter)
   return dp_params, val_dp_params, event_steps

@@ -1,6 +1,5 @@
 import os
 import sys
-import shutil
 from dataclasses import dataclass
 import colorlog
 import torch as pt
@@ -8,12 +7,11 @@ import numpy as np
 import pandas as pd
 from torchvision import utils as vutils
 from torchvision import datasets
-from filelock import FileLock
+from filelock import Timeout, FileLock
 from eval_accuracy import synth_to_real_test
-from eval_fid import get_fid_scores_fixed
+from eval_fid import get_fid_scores
 from eval_prdc import get_prdc
 from mnist_synth_data_benchmark import prep_models, model_test_run
-from data_loading import IMAGENET_MEAN, IMAGENET_SDEV
 LOG = colorlog.getLogger(__name__)
 
 
@@ -22,6 +20,9 @@ class BestResult:
   score = None
   step = None
   data_file = None
+  first_local_optimum_step = None
+  first_local_optimum_score = None
+  first_local_optimum_data_file = None
 
 
 def log_args(args):
@@ -54,13 +55,13 @@ def get_base_log_dir():
   logdir_candidates = ['/home/fharder/dp-gfmn/logs/',
                        '/home/frederik/PycharmProjects/dp-gfmn/logs/']
   default_base_dir = os.path.normpath(os.path.join(os.getcwd(), '../logs'))
-  if os.path.exists(default_base_dir):
-    return default_base_dir
   for path in logdir_candidates:
     if os.path.exists(path):
       return path
-
-  return None
+  if os.path.exists(default_base_dir):
+    return default_base_dir
+  else:
+    return None
 
 
 def configure_logger(log_importance_level):
@@ -88,7 +89,7 @@ def log_noise_norm(noise_vec, data_norm, writer, prefix):
     LOG.info(f'{prefix} feat norm: {data_norm}, noise norm: {noise_norm}, SNR: {snr}')
 
 
-def log_losses_and_imgs(net_gen, train_acc_losses, fixed_noise,
+def log_losses_and_imgs(net_gen, train_acc_losses, valid_acc_losses, fixed_noise,
                         iter_id, writer, n_iter, valid_iter, log_dir, exp_name):
 
   ngm = train_acc_losses.gen_mean / valid_iter
@@ -103,8 +104,25 @@ def log_losses_and_imgs(net_gen, train_acc_losses, fixed_noise,
     writer.add_scalar('train_losses/mean_net', nm, global_step=iter_id)
     writer.add_scalar('train_losses/var_net', nv, global_step=iter_id)
 
+  if valid_acc_losses is not None:
+    ngm = valid_acc_losses.gen_mean / valid_iter
+    ngv = valid_acc_losses.var / valid_iter
+    nm = valid_acc_losses.mean / valid_iter
+    nv = valid_acc_losses.var / valid_iter
+    LOG.info(' ' * len(f'[{iter_id}/{n_iter}] ') +
+             f'valid Loss_Gz: {ngm:.6f} Loss_GzVar: {ngv:.6f} '
+             f'Loss_vMean: {nm:.6f} Loss_vVar: {nv:.6f}')
+    if writer is not None:
+      writer.add_scalar('validation_losses/generator_mean_matching', ngm, global_step=iter_id)
+      writer.add_scalar('validation_losses/generator_var_matching', ngv, global_step=iter_id)
+      writer.add_scalar('validation_losses/mean_net', nm, global_step=iter_id)
+      writer.add_scalar('validation_losses/var_net', nv, global_step=iter_id)
+
   with pt.no_grad():
-    fake = net_gen(fixed_noise).detach()
+    if isinstance(net_gen, pt.nn.parallel.DistributedDataParallel):
+      fake = net_gen.module(fixed_noise).detach()
+    else:
+      fake = net_gen(fixed_noise).detach()
 
   if exp_name is None:
     img_path = f'{log_dir}/images/fake_samples_iterId_{iter_id}.png'
@@ -115,8 +133,8 @@ def log_losses_and_imgs(net_gen, train_acc_losses, fixed_noise,
 
   data_to_print = fake.data[:100]
   vutils.save_image(data_to_print, img_path, normalize=True, nrow=10)
-  mean_tsr = pt.tensor(IMAGENET_MEAN, device=fake.device)
-  sdev_tsr = pt.tensor(IMAGENET_SDEV, device=fake.device)
+  mean_tsr = pt.tensor([0.485, 0.456, 0.406], device=fake.device)
+  sdev_tsr = pt.tensor([0.229, 0.224, 0.225], device=fake.device)
   data_to_print = data_to_print * sdev_tsr[None, :, None, None] + mean_tsr[None, :, None, None]
   LOG.info(f'')
   data_to_print = pt.clamp(data_to_print, min=0., max=1.)
@@ -179,7 +197,7 @@ def delayed_log(level, message):
 
 def log_synth_data_eval(net_gen, writer, step, noise_maker, device, dataset, synth_dataset_size,
                         batch_size, log_dir, n_classes, fid_dataset_size, image_size,
-                        center_crop_size, data_scale, local_fid_eval_storage, skip_prdc, final_step):
+                        center_crop_size, data_scale, final_step):
   return_score = None
 
   if final_step:
@@ -191,29 +209,18 @@ def log_synth_data_eval(net_gen, writer, step, noise_maker, device, dataset, syn
     fid_file_name = f'fid_it{step}'
     acc_file_name = f'accuracies_it{step}'
 
-  # for quicker run on cluster, save syn data locally during fid eval
-  if local_fid_eval_storage is not None and os.path.exists(local_fid_eval_storage):
-    syn_data_save_dir = local_fid_eval_storage
-    run_fid_locally = True
-  else:
-    syn_data_save_dir = log_dir
-    run_fid_locally = False
-
-  LOG.info(f'generating synthetic dataset at dir={syn_data_save_dir}')
+  LOG.info(f'generating synthetic dataset')
   # syn_data_file_name = f'synth_data_it{step + 1}'
   syn_data_file = create_synth_dataset(synth_dataset_size, net_gen, batch_size,
-                                       noise_maker, device, save_dir=syn_data_save_dir,
+                                       noise_maker, device, save_dir=log_dir,
                                        file_name=syn_data_file_name, n_classes=n_classes)
 
   score_ser = pd.Series({}, name=step)
 
   if dataset in {'cifar10', 'celeba', 'lsun'}:  # skip for mnist
     LOG.info(f'FID eval')
-    # fid_score = get_fid_scores(syn_data_file, dataset, device, fid_dataset_size,
-    #                            image_size, center_crop_size, data_scale, batch_size=batch_size)
-    fid_score = get_fid_scores_fixed(syn_data_file, dataset, device, fid_dataset_size,
-                                     image_size, center_crop_size, data_scale, batch_size=batch_size)
-
+    fid_score = get_fid_scores(syn_data_file, dataset, device, fid_dataset_size,
+                               image_size, center_crop_size, data_scale, batch_size=batch_size)
     np.save(os.path.join(log_dir, fid_file_name), fid_score)
     if writer is not None:
       writer.add_scalar('eval/FID', fid_score, global_step=step)
@@ -225,22 +232,18 @@ def log_synth_data_eval(net_gen, writer, step, noise_maker, device, dataset, syn
     pretrained = True
     # running MNIST with pretrained=False should be possible.
     # the only problem right now is that vgg16 requires input HW of 32 at minimum and MNIST has 28
-    if not skip_prdc:
-      LOG.info('prdc eval')
-      prdc_batch_size = 100
-      prdc_n_samples = 10_000
-      prdc_dict = get_prdc(syn_data_file, prdc_batch_size, prdc_n_samples, dataset,
-                           image_size, center_crop_size, data_scale,
-                           nearest_k=5, skip_pr=False, pretrained=pretrained, device=device)
-      score_ser['precision'] = prdc_dict['precision']
-      score_ser['recall'] = prdc_dict['recall']
-      score_ser['density'] = prdc_dict['density']
-      score_ser['coverage'] = prdc_dict['coverage']
-    else:
-      score_ser['precision'] = 0.
-      score_ser['recall'] = 0.
-      score_ser['density'] = 0.
-      score_ser['coverage'] = 0.
+
+    LOG.info('prdc eval')
+    prdc_batch_size = 100
+    prdc_n_samples = 10_000
+    prdc_dict = get_prdc(syn_data_file, prdc_batch_size, prdc_n_samples, dataset,
+                         image_size, center_crop_size, data_scale,
+                         nearest_k=5, skip_pr=False, pretrained=pretrained, device=device)
+    score_ser['precision'] = prdc_dict['precision']
+    score_ser['recall'] = prdc_dict['recall']
+    score_ser['density'] = prdc_dict['density']
+    score_ser['coverage'] = prdc_dict['coverage']
+
   if n_classes is not None:
     LOG.info(f'classifier eval')
     if dataset == 'cifar10':
@@ -270,12 +273,87 @@ def log_synth_data_eval(net_gen, writer, step, noise_maker, device, dataset, syn
     score_df = pd.DataFrame(score_ser)
   score_df.to_csv(score_csv_path)
 
-  # after the evaluation, copy over synthetic data file to central storage
-  if run_fid_locally:
-    LOG.info(f'copying syn data from {syn_data_file} to {log_dir}')
-    shutil.copy(syn_data_file, log_dir)
-    syn_data_file = os.path.join(log_dir, syn_data_file.split('/')[-1])
-    assert os.path.exists(syn_data_file)
+  return syn_data_file, return_score
+
+
+def log_staticdset_synth_data_eval(net_gen, writer, step, device, dataset, synth_dataset_size,
+                        batch_size, log_dir, n_classes, fid_dataset_size, image_size,
+                        center_crop_size, data_scale, final_step):
+  return_score = None
+
+  if final_step:
+    syn_data_file_name = f'synth_data'
+    fid_file_name = f'fid'
+    acc_file_name = 'accuracies'
+  else:
+    syn_data_file_name = f'synth_data_it{step}'
+    fid_file_name = f'fid_it{step}'
+    acc_file_name = f'accuracies_it{step}'
+
+  LOG.info(f'generating synthetic dataset')
+  # syn_data_file_name = f'synth_data_it{step + 1}'
+  syn_data_file = create_staticdset_synth_dataset(synth_dataset_size, net_gen, batch_size,
+                                                  save_dir=log_dir,
+                                                  file_name=syn_data_file_name,
+                                                  n_classes=n_classes)
+
+  score_ser = pd.Series({}, name=step)
+
+  # if dataset in {'cifar10', 'celeba', 'lsun'}:  # skip for mnist
+  #   LOG.info(f'FID eval')
+  #   fid_score = get_fid_scores(syn_data_file, dataset, device, fid_dataset_size,
+  #                              image_size, center_crop_size, data_scale, batch_size=batch_size)
+  #   np.save(os.path.join(log_dir, fid_file_name), fid_score)
+  #   if writer is not None:
+  #     writer.add_scalar('eval/FID', fid_score, global_step=step)
+  #   return_score = fid_score
+  #
+  #   score_ser['fid'] = fid_score
+  #
+  # if dataset in {'cifar10', 'celeba', 'lsun'}:
+  #   pretrained = True
+  #   # running MNIST with pretrained=False should be possible.
+  #   # the only problem right now is that vgg16 requires input HW of 32 at minimum and MNIST has 28
+  #
+  #   LOG.info('prdc eval')
+  #   prdc_batch_size = 100
+  #   prdc_n_samples = 10_000
+  #   prdc_dict = get_prdc(syn_data_file, prdc_batch_size, prdc_n_samples, dataset,
+  #                        image_size, center_crop_size, data_scale,
+  #                        nearest_k=5, skip_pr=False, pretrained=pretrained, device=device)
+  #   score_ser['precision'] = prdc_dict['precision']
+  #   score_ser['recall'] = prdc_dict['recall']
+  #   score_ser['density'] = prdc_dict['density']
+  #   score_ser['coverage'] = prdc_dict['coverage']
+
+  if n_classes is not None:
+    LOG.info(f'classifier eval')
+    if dataset == 'cifar10':
+      test_acc, train_acc = synth_to_real_test(device, syn_data_file, data_scale)
+      np.savez(os.path.join(log_dir, acc_file_name),
+               test_acc=test_acc, train_acc=train_acc)
+
+      score_ser['train_acc'] = train_acc
+      score_ser['test_acc'] = test_acc
+
+      if writer is not None:
+        writer.add_scalar('eval/test_acc', test_acc, global_step=step)
+        writer.add_scalar('eval/train_acc', train_acc, global_step=step)
+      LOG.info(f'train accuracy: {train_acc}, test accuracy: {test_acc}')
+    elif dataset in {'dmnist', 'fmnist'}:
+      mean_acc, accs = mnist_synth_to_real_test(dataset, syn_data_file, writer, log_dir,
+                                                acc_file_name, step)
+      return_score = mean_acc
+    else:
+      raise ValueError
+
+  score_csv_path = os.path.join(log_dir, 'eval_scores.csv')
+  if os.path.exists(score_csv_path):
+    score_df = pd.read_csv(score_csv_path, index_col=0)
+    score_df[score_ser.name] = score_ser
+  else:
+    score_df = pd.DataFrame(score_ser)
+  score_df.to_csv(score_csv_path)
 
   return syn_data_file, return_score
 
@@ -284,11 +362,19 @@ def note_best_scores_column(best_result: BestResult, log_dir, is_proxy):
   score_csv_path = os.path.join(log_dir, 'eval_scores.csv')
   proxy_string = 'proxy_' if is_proxy else ''
 
+  if best_result.first_local_optimum_score is None:  # if no local opt found, it's the final score
+    best_result.first_local_optimum_score = best_result.score
+    best_result.first_local_optimum_step = best_result.step
+    best_result.first_local_optimum_data_file = best_result.data_file
+
   LOG.info(f'best overall {proxy_string}score: {best_result.score} at step {best_result.step}')
+  LOG.info(f'first best {proxy_string}score: {best_result.first_local_optimum_score} at step '
+           f'{best_result.first_local_optimum_step}')
 
   if os.path.exists(score_csv_path):
     score_df = pd.read_csv(score_csv_path, index_col=0)
     score_df[f'{proxy_string}best'] = score_df[str(best_result.step)].copy()
+    score_df[f'first_{proxy_string}best'] = score_df[str(best_result.first_local_optimum_step)].copy()
     score_df.to_csv(score_csv_path)
 
 
@@ -317,6 +403,42 @@ def create_synth_dataset(n_samples, net_gen, batch_size, noise_maker, device, da
         syn_batch = net_gen.module(z_in)  # don't sync, since this only runs on one gpu
       else:
         syn_batch = net_gen(z_in)
+
+      samples_list.append(syn_batch.detach().cpu())
+    samples = pt.cat(samples_list, dim=0)
+  if data_format == 'array':
+    file_name = file_name if file_name.endswith('.npz') else file_name + '.npz'
+    file_path = os.path.join(save_dir, file_name)
+    if labels_int is None:
+      np.savez(file_path, x=samples.numpy())
+    else:
+      np.savez(file_path, x=samples.numpy(), y=labels_int.cpu().numpy())
+  else:
+    file_name = file_name if file_name.endswith('.pt') else file_name + '.pt'
+    file_path = os.path.join(save_dir, file_name)
+    if labels_int is None:
+      pt.save({'x': samples}, file_path)
+    else:
+      pt.save({'x': samples, 'y': labels_int.cpu()}, file_path)
+  return file_path
+
+
+def create_staticdset_synth_dataset(n_samples, net_gen, batch_size, data_format='array',
+                                    save_dir='.', file_name='synth_data', n_classes=None):
+  assert data_format in {'array', 'tensor'}, f'wrong format: {data_format}'
+  assert n_samples % batch_size == 0
+  batches = [batch_size] * (n_samples // batch_size)
+  assert n_classes is not None
+  labels_list = net_gen.labels * len(batches)
+  labels_int = pt.cat([pt.argmax(net_gen.labels, dim=1)] * len(batches))
+
+  samples_list = []
+  with pt.no_grad():
+    for _ in labels_list:
+      if isinstance(net_gen, pt.nn.parallel.DistributedDataParallel):
+        syn_batch = net_gen.module(None)  # don't sync, since this only runs on one gpu
+      else:
+        syn_batch = net_gen(None)
 
       samples_list.append(syn_batch.detach().cpu())
     samples = pt.cat(samples_list, dim=0)

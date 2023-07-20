@@ -1,11 +1,11 @@
-import math
 import torch as pt
 from torch.nn.functional import mse_loss
-from util import GeneratorNoiseMaker
+from util import GeneratorNoiseMaker, Embeddings
 from util_logging import LOG, log_real_feature_norms
 from dp_functions import bound_sensitivity_per_sample
 from data_loading import load_dataset
-from encoders_class import Encoders
+from models.encoders_class import Encoders
+from models.model_builder import StaticDataset
 
 
 def regular_match_loss(fake_moment, real_moment, fake_m_avg, m_avg_alpha):
@@ -16,7 +16,7 @@ def regular_match_loss(fake_moment, real_moment, fake_m_avg, m_avg_alpha):
   return loss, fake_m_avg
 
 
-def regular_moving_average_update(m_avg, m_avg_alpha, feat_emb, acc_losses, optimizer_g,
+def regular_moving_average_update(feat_emb, m_avg, m_avg_alpha, acc_losses, optimizer_g,
                                   matched_moments):
 
   fake_data_feat_mean = reduce_feats_list_or_tensor(lambda x: pt.mean(x, dim=0), feat_emb.fake_feats)
@@ -119,10 +119,31 @@ def extract_features(data_batch, net_enc, channel_ids_by_enc, n_matching_layers,
 
 
 def extract_features_with_hooks(data_batch, encoders: Encoders):
+  # feats_list = []
   for encoder_name in encoders.models:
-    data_batch = encoders.rescale_batch_input(data_batch, encoder_name)
     encoders.models[encoder_name](data_batch)
+  if encoders.prune_mode is not None:
+    pruned_feats = []
+    for layer_name in encoders.layer_feats:
+      feats = encoders.layer_feats[layer_name]
+      if encoders.prune_mode == 'channels':
+        channel_ids = encoders.channel_ids[layer_name]
+        pruned_feats.append(feats[:, channel_ids, :, :])
+      elif encoders.prune_mode == 'weights':
+        weight_ids = encoders.weight_ids[layer_name]
+        pruned_feats.append(feats.contiguous().view(feats.shape[0], -1)[:, weight_ids])
+      else:
+        return ValueError
+    # if flatten_feats:
+    return [k.contiguous().view(k.shape[0], -1) for k in pruned_feats]
+    # else:
+    #   return [k.contiguous() for k in pruned_feats]
+  else:
+    # LOG.warn(f'shapes {[k.shape for k in encoders.layer_feats.values()]}')
+    # if flatten_feats:
     return [k.contiguous().view(k.shape[0], -1) for k in encoders.layer_feats.values()]
+    # else:
+    #   return [k.contiguous() for k in encoders.layer_feats.values()]
 
 
 def extract_and_bound_features(data_batch, net_enc, n_matching_layers, match_with_top_layers,
@@ -164,25 +185,25 @@ def extract_and_bound_features(data_batch, net_enc, n_matching_layers, match_wit
 
 
 def compute_data_embedding(net_enc, n_matching_layers, device, dataloader, writer,
-                           channel_ids_by_enc, dp_params, match_with_top_layers,
+                           channel_ids_by_enc, dp_params, no_cuda, match_with_top_layers,
                            matched_moments, n_classes):
   if n_classes is None:
     return compute_unlabeled_data_embedding(net_enc, n_matching_layers, device, dataloader, writer,
-                                            channel_ids_by_enc, match_with_top_layers,
+                                            channel_ids_by_enc, no_cuda, match_with_top_layers,
                                             dp_params, matched_moments)
   elif isinstance(net_enc, Encoders) and (net_enc.n_split_layers is not None):
     return compute_hybrid_labeled_data_embedding(net_enc, n_matching_layers, device, dataloader,
-                                                 writer, channel_ids_by_enc,
+                                                 writer, channel_ids_by_enc, no_cuda,
                                                  match_with_top_layers, dp_params, matched_moments,
                                                  n_classes)
   else:
     return compute_labeled_data_embedding(net_enc, n_matching_layers, device, dataloader, writer,
-                                          channel_ids_by_enc, match_with_top_layers,
+                                          channel_ids_by_enc, no_cuda, match_with_top_layers,
                                           dp_params, matched_moments, n_classes)
 
 
 def compute_labeled_data_embedding(net_enc, n_matching_layers, device, dataloader, writer,
-                                   channel_ids_by_enc,
+                                   channel_ids_by_enc, no_cuda,
                                    match_with_top_layers, dp_params, matched_moments, n_classes):
   do_second_moment = matched_moments in {'mean_and_var', 'm1_and_m2'}
   feat_sum = None
@@ -196,8 +217,9 @@ def compute_labeled_data_embedding(net_enc, n_matching_layers, device, dataloade
   for i, data in enumerate(dataloader, 1):
     # gets real images
     x_in, y_in = data
-    x_in = x_in.to(device)
-    y_in = y_in.to(device)
+    if not no_cuda:
+      x_in = x_in.to(device)
+      y_in = y_in.to(device)
     y_one_hot = to_one_hot[y_in]
 
     n_examples += pt.sum(y_one_hot, dim=0)  # n_examples per class
@@ -242,7 +264,7 @@ def compute_labeled_data_embedding(net_enc, n_matching_layers, device, dataloade
 
 
 def compute_unlabeled_data_embedding(net_enc, n_matching_layers, device, dataloader, writer,
-                                     channel_ids_by_enc,
+                                     channel_ids_by_enc, no_cuda,
                                      match_with_top_layers, dp_params, matched_moments):
   do_second_moment = matched_moments in {'mean_and_var', 'm1_and_m2'}
   feat_sum = None
@@ -255,7 +277,8 @@ def compute_unlabeled_data_embedding(net_enc, n_matching_layers, device, dataloa
   for i, data in enumerate(dataloader, 1):
     # gets real images
     x_in, y_in = data
-    x_in = x_in.to(device)
+    if not no_cuda:
+      x_in = x_in.to(device)
 
     n_examples += x_in.size()[0]
 
@@ -387,7 +410,7 @@ def hybrid_labeled_batch_embedding(encoders, feats_batch, feats_batch_sqrd, l2_n
 
 
 def compute_hybrid_labeled_data_embedding(encoders: Encoders, n_matching_layers, device, dataloader,
-                                          writer, channel_ids_by_enc,
+                                          writer, channel_ids_by_enc, no_cuda,
                                           match_with_top_layers, dp_params, matched_moments,
                                           n_classes):
   assert encoders.n_split_layers > 0
@@ -405,8 +428,9 @@ def compute_hybrid_labeled_data_embedding(encoders: Encoders, n_matching_layers,
   for i, data in enumerate(dataloader, 1):
     # gets real images
     x_in, y_in = data
-    x_in = x_in.to(device)
-    y_in = y_in.to(device)
+    if not no_cuda:
+      x_in = x_in.to(device)
+      y_in = y_in.to(device)
     y_one_hot = to_one_hot[y_in]
 
     n_examples += pt.sum(y_one_hot, dim=0)  # n_examples per class
@@ -480,7 +504,7 @@ def sum_feats_by_label(feats, feats_sqrd, l2_batch, y_one_hot):
 
 
 def get_test_data_embedding(net_enc, n_matching_layers, device,
-                            channel_ids_by_enc, match_with_top_layers,
+                            channel_ids_by_enc, no_cuda, match_with_top_layers,
                             dp_params, matched_moments, data_scale,
                             n_classes, dataset, image_size, center_crop_size, dataroot,
                             batch_size, n_workers, labeled, val_data):
@@ -490,7 +514,7 @@ def get_test_data_embedding(net_enc, n_matching_layers, device,
                                 batch_size, n_workers, data_scale, labeled,
                                 test_set=use_test_set)
   emb_res = compute_data_embedding(net_enc, n_matching_layers, device, test_loader, None,
-                                   channel_ids_by_enc, dp_params, match_with_top_layers,
+                                   channel_ids_by_enc, dp_params, no_cuda, match_with_top_layers,
                                    matched_moments, n_classes)
   test_feat_means, test_feat_vars, _, _ = emb_res
   return test_feat_means, test_feat_vars
@@ -597,18 +621,94 @@ def get_static_losses_valid(means_valid, vars_valid, gen, encoders, noise_maker:
   return mean_diff, vars_diff
 
 
-def get_number_of_matching_layers_pytorch(encoders: Encoders, device, data_loader):
-  assert data_loader is not None
+def get_staticdset_static_losses_valid(means_valid, vars_valid, gen: StaticDataset, encoders,
+                                       n_matching_layers, match_with_top_layers, dp_params,
+                                       channel_ids_by_enc, do_second_moment, writer, step):
+  # make a small synthetic dataset and collect embeddings
+  labels = gen.labels
+  syn_batch = gen(None)
 
-  x, _ = next(data_loader.__iter__())
-  encoders.load_features(x.to(device))
-  n_matching_layers = len(encoders.layer_feats)
-  LOG.info(f"# actual n_matching_layers: {n_matching_layers}")
+  with pt.no_grad():
+    # get embedding
+    ef_res = extract_and_bound_features(syn_batch, encoders, n_matching_layers,
+                                        match_with_top_layers, dp_params,
+                                        channel_ids_by_enc, do_second_moment)
+    batch_feats, batch_feats_sqrd, l2_batch, _ = ef_res
+    feat_sum, feat_sqrd_sum, _ = sum_feats_by_label(batch_feats, batch_feats_sqrd, l2_batch,
+                                                    labels)
 
-  n_feat_total = 0
-  for layer_name, layer_feat in encoders.layer_feats.items():
-    n_feat = math.prod(layer_feat.shape[1:])
-    encoders.n_feats_by_layer[layer_name] = n_feat
-    n_feat_total += n_feat
+  mean_diff = pt.sum((means_valid - (feat_sum / labels.shape[0])) ** 2)
+  vars_diff = pt.sum((vars_valid - (feat_sqrd_sum / labels.shape[0])) ** 2)
 
-  LOG.info(f"# of features total (before selection): {n_feat_total}")
+  # then write loss to tensorflow
+  writer.add_scalar('val/mean_loss', mean_diff, global_step=step)
+  writer.add_scalar('val/vars_loss', vars_diff, global_step=step)
+  LOG.info(f'Validation Losses: m1 {mean_diff}, m2 {vars_diff}')
+  return mean_diff, vars_diff
+
+
+def ma_update(feat_emb, m_avg, optimizers, train_acc_losses,
+              m_avg_valid, optimizers_valid, acc_losses_valid,
+              update_type, ma_validation, matched_moments, m_avg_alpha, gen):
+  if update_type == 'regular_ma':
+    regular_moving_average_update(feat_emb, m_avg, m_avg_alpha, train_acc_losses,
+                                  optimizers.gen, matched_moments)
+
+    if ma_validation:
+      regular_moving_average_valid(feat_emb, m_avg_valid, m_avg_alpha, acc_losses_valid,
+                                   matched_moments)
+
+  elif update_type == 'adam_ma':
+    adam_moving_average_update(feat_emb, train_acc_losses, m_avg, optimizers, matched_moments)
+
+    if ma_validation:
+      adam_moving_average_valid(feat_emb, acc_losses_valid, m_avg_valid, optimizers_valid,
+                                matched_moments)
+  else:  # no_ma
+    no_mavg_update(feat_emb, optimizers.gen, matched_moments, gen)
+    # fake_data_feat_mean = reduce_feats_list_or_tensor(lambda x: pt.mean(x, dim=0),
+    #                                                   feat_emb.fake_feats)
+    # res_mean = adam_match_loss(m_avg.mean, fake_data_feat_mean, feat_emb.real_means,
+    #                            acc_losses.mean, optimizers.mean, acc_losses.gen_mean)
+    # acc_losses.mean, acc_losses.gen_mean, loss_net_g_mean = res_mean
+    #
+    # if matched_moments == 'mean':
+    #   loss_net_g_var = 0.
+    # elif matched_moments == 'mean_and_var':
+    #   fake_data_feat_var = reduce_feats_list_or_tensor(var_reduce_op, feat_emb.fake_feats_sqrd)
+    #   # fake_data_feat_var = pt.var(fake_data_feats, 0)
+    #   res_var = adam_match_loss(m_avg.net_var, fake_data_feat_var, feat_emb.real_vars,
+    #                             acc_losses.var, optimizers.var, acc_losses.gen_var)
+    #   acc_losses.var, acc_losses.gen_var, loss_net_g_var = res_var
+    # else:
+    #   fake_data_feat_var = reduce_feats_list_or_tensor(lambda x: pt.mean(x, dim=0),
+    #                                                    feat_emb.fake_feats_sqrd)
+    #   res_var = adam_match_loss(m_avg.var, fake_data_feat_var, feat_emb.real_vars,
+    #                             acc_losses.var, optimizers.var, acc_losses.gen_var)
+    #   acc_losses.var, acc_losses.gen_var, loss_net_g_var = res_var
+    #
+    # loss_net_g = loss_net_g_mean + loss_net_g_var
+    # loss_net_g.backward()
+    # optimizers.gen.step()
+
+
+def no_mavg_update(feat_emb: Embeddings, opt_gen, matched_moments, gen):
+  fake_means = reduce_feats_list_or_tensor(lambda x: pt.mean(x, dim=0), feat_emb.fake_feats)
+  mean_loss = mse_loss(feat_emb.real_means, fake_means)
+  if matched_moments == 'mean':
+    var_loss = 0.
+  elif matched_moments == 'mean_and_var':
+    fake_vars = reduce_feats_list_or_tensor(var_reduce_op, feat_emb.fake_feats_sqrd)
+    var_loss = mse_loss(feat_emb.real_vars, fake_vars)
+  else:
+    fake_vars = reduce_feats_list_or_tensor(lambda x: pt.mean(x, dim=0), feat_emb.fake_feats_sqrd)
+    var_loss = mse_loss(feat_emb.real_vars, fake_vars)
+
+  total_loss = mean_loss + var_loss
+  total_loss.backward()
+  # for param in gen.parameters():
+  #   LOG.warning(f'{param.shape}')
+  #   LOG.warning(f'{pt.norm(param.grad)}')
+  #   LOG.warning(f'{pt.max(param.grad)}')
+  #   LOG.warning(f'{pt.min(param.grad)}')
+  opt_gen.step()

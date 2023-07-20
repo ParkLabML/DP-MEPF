@@ -19,7 +19,7 @@ import torch as pt
 from torch.cuda.amp import GradScaler, autocast
 from torch.nn import CrossEntropyLoss
 from torch.optim import SGD, lr_scheduler
-from downstream_models import get_ffcv_model
+from models.downstream_models import get_ffcv_model
 from data_loading import load_cifar10, load_synth_dataset
 
 

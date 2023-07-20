@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from data_loading import load_dataset
 from util_logging import LOG, BestResult
+from models.encoders_class import Encoders
 
 
 @dataclass
@@ -79,8 +80,10 @@ def set_random_seed(manual_seed):
   #   pt.cuda.manual_seed_all(manual_seed)
 
 
-def create_checkpoint(feat_emb, net_gen, m_avg, optimizers, step, fixed_noise, log_dir,
-                      new_ckpt_iter, best_result: BestResult, best_proxy_result: BestResult):
+def create_checkpoint(feat_emb, net_gen, encoders, m_avg, optimizers,
+                      step, fixed_noise, log_dir, update_type, new_ckpt_iter,
+                      m_avg_valid, optimizers_valid, best_result: BestResult,
+                      best_proxy_result: BestResult):
   # saving models
   checkpoint_dict = dict()
   checkpoint_dict['iter'] = step
@@ -90,11 +93,17 @@ def create_checkpoint(feat_emb, net_gen, m_avg, optimizers, step, fixed_noise, l
   checkpoint_dict['best_score'] = best_result.score
   checkpoint_dict['best_step'] = best_result.step
   checkpoint_dict['best_syn_data_file'] = best_result.data_file
+  checkpoint_dict['first_best_score'] = best_result.first_local_optimum_score
+  checkpoint_dict['first_best_step'] = best_result.first_local_optimum_step
+  checkpoint_dict['first_best_syn_data_file'] = best_result.first_local_optimum_data_file
 
   if best_proxy_result is not None:
     checkpoint_dict['best_proxy_score'] = best_proxy_result.score
     checkpoint_dict['best_proxy_step'] = best_proxy_result.step
     checkpoint_dict['best_proxy_syn_data_file'] = best_proxy_result.data_file
+    checkpoint_dict['first_best_proxy_score'] = best_proxy_result.first_local_optimum_score
+    checkpoint_dict['first_best_proxy_step'] = best_proxy_result.first_local_optimum_step
+    checkpoint_dict['first_best_proxy_syn_data_file'] = best_proxy_result.first_local_optimum_data_file
 
   if feat_emb.means_valid is not None:
     checkpoint_dict['feat_means_valid'] = feat_emb.means_valid
@@ -103,10 +112,30 @@ def create_checkpoint(feat_emb, net_gen, m_avg, optimizers, step, fixed_noise, l
   checkpoint_dict['net_gen'] = net_gen.state_dict()
   checkpoint_dict['opt_gen'] = optimizers.gen.state_dict()
 
-  checkpoint_dict['net_mean'] = m_avg.mean.state_dict()
-  checkpoint_dict['net_var'] = m_avg.var.state_dict()
-  checkpoint_dict['opt_mean'] = optimizers.mean.state_dict()
-  checkpoint_dict['opt_var'] = optimizers.var.state_dict()
+  if update_type == 'adam_ma':
+    checkpoint_dict['net_mean'] = m_avg.mean.state_dict()
+    checkpoint_dict['net_var'] = m_avg.var.state_dict()
+    checkpoint_dict['opt_mean'] = optimizers.mean.state_dict()
+    checkpoint_dict['opt_var'] = optimizers.var.state_dict()
+
+    if m_avg_valid.mean is not None:
+      checkpoint_dict['net_mean_valid'] = m_avg_valid.mean.state_dict()
+      checkpoint_dict['net_var_valid'] = m_avg_valid.var.state_dict()
+      checkpoint_dict['opt_mean_valid'] = optimizers_valid.mean.state_dict()
+      checkpoint_dict['opt_var_valid'] = optimizers_valid.var.state_dict()
+
+  # save feature selection from encoders (only support Encoders class)
+  if isinstance(encoders, Encoders) and (encoders.prune_mode is not None):
+
+    checkpoint_dict['encoder_channels'] = encoders.channel_ids
+    checkpoint_dict['encoder_weights'] = encoders.weight_ids
+    checkpoint_dict['encoder_nfeats'] = encoders.n_feats_by_layer
+    if len(encoders.pca_maps) > 0:
+      pca_state_dicts = {name: pca.to_param_tuple() for (name, pca) in encoders.pca_maps.items()}
+      LOG.warning(f'{pca_state_dicts}')
+      checkpoint_dict['encoder_pca'] = pca_state_dicts
+    else:
+      checkpoint_dict['encoder_pca'] = dict()
 
   pt.save(checkpoint_dict, os.path.join(log_dir, 'ckpt.pt'))
   # saving model with a different suffix
@@ -200,6 +229,7 @@ def load_checkpoint(log_dir, selected_iteration=None, rank=None):
 
 def get_optimizers(net_gen, gen_lr, m_avg, m_avg_lr, beta1, ckpt):
   optimizer_gen = optim.Adam(net_gen.parameters(), lr=gen_lr, betas=(beta1, 0.999))
+  # optimizer_gen = optim.SGD(net_gen.parameters(), lr=gen_lr)
   if ckpt is not None:
     optimizer_gen.load_state_dict(ckpt['opt_gen'])
     # prep_opt_dict_capturable(optimizer_gen)

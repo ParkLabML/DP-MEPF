@@ -121,6 +121,36 @@ def find_dpsgd_sigma(target_eps, target_delta, batch_size, n_samples, n_iter,
   return eps, sigma
 
 
+def rebuttal_delta_debate():
+  epsilons = [10., 5., 2., 1., .5, .2]
+  wrong_delta = 1e-5
+  right_delta = 1e-6 # 1/203_000
+  m2_scaling = 1.
+  val_noise_scaling = 10.
+  neighbouring_relation = 'swap'
+
+  def right_mechanism(sig):
+    gm1 = ExactGaussianMechanism(sig)
+    gm2 = ExactGaussianMechanism(sig * m2_scaling)
+    gm3 = ExactGaussianMechanism(sig * val_noise_scaling)
+    gm4 = ExactGaussianMechanism(sig * m2_scaling * val_noise_scaling)
+    composed_gm = Composition()([gm1, gm2, gm3, gm4], [1, 1, 1, 1])
+    composed_gm.replace_one = neighbouring_relation == 'swap'
+    return composed_gm.get_approxDP(right_delta)
+
+  for wrong_eps in epsilons:
+    _, sigma_train, _ = find_train_val_sigma_m1m2(wrong_eps, wrong_delta, m2_scaling,
+                                                  val_noise_scaling, neighbouring_relation)
+    _, sigma_new, _ = find_train_val_sigma_m1m2(wrong_eps, right_delta, m2_scaling,
+                                                  val_noise_scaling, neighbouring_relation)
+    right_eps = right_mechanism(sigma_train)
+    print(f'for m1m2+val, ({wrong_eps}, {wrong_delta})-DP is also ({right_eps}, {right_delta})-DP')
+    # print(f'epsilon{right_eps/wrong_eps}')
+    print(f'sigma old={sigma_train}, sigma new={sigma_new}, frac={sigma_new/sigma_train}')
+
+
+
+
 def main():
   target_eps = 1.
   target_delta = 1e-6
@@ -134,5 +164,14 @@ def main():
   print(sig1, sig2, sig3, sig4)
 
 
+def tmlr_rebuttal_check():
+  for eps in [0.1, 0.2, 0.5, 1, 2, 5, 10]:
+    _, sig1 = find_single_release_sigma(eps, target_delta=1e-5)
+    # _, sig1, _ = find_train_val_sigma_m1m2(eps, target_delta=1e-5, m2_scaling=1., val_noise_scaling=10.)
+    print(eps, sig1)
+
+
 if __name__ == '__main__':
-  main()
+  # main()
+  # rebuttal_delta_debate()
+  tmlr_rebuttal_check()

@@ -6,15 +6,6 @@ import torchvision.transforms as transforms
 import torchvision.datasets as dset
 import numpy as np
 
-IMAGENET_MEAN = [0.485, 0.456, 0.406]
-IMAGENET_SDEV = [0.229, 0.224, 0.225]
-CIFAR10_MEAN = [0.4914, 0.482, 0.447]
-CIFAR10_SDEV = [0.247, 0.243, 0.262]
-CELEBA32_MEAN = [0.508, 0.421, 0.375]
-CELEBA32_SDEV = [0.294, 0.271, 0.269]
-CELEBA64_MEAN = [0.508, 0.422, 0.377]
-CELEBA64_SDEV = [0.301, 0.279, 0.277]
-
 
 def shift_data_transform(x):
   return 2 * x - 1
@@ -22,13 +13,11 @@ def shift_data_transform(x):
 
 def scale_transform(data_scale):
   if data_scale == 'normed':
-    return transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_SDEV)
+    return transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
   elif data_scale == 'bounded':
     return transforms.Lambda(shift_data_transform)
   elif data_scale == 'normed05':
     return transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
-  elif data_scale == '0_1':
-    return transforms.Normalize(mean=[0., 0., 0.], std=[1., 1., 1.])
   else:
     raise ValueError
 
@@ -47,7 +36,6 @@ def load_dataset(dataset_name, image_size, center_crop_size, dataroot, batch_siz
                               transforms.CenterCrop(center_crop_size)])
 
     transformations.extend([transforms.ToTensor(), scale_transform(data_scale)])
-
     # folder dataset
     dataset = dset.ImageFolder(root=os.path.join(dataroot, 'img_align_celeba'),
                                transform=transforms.Compose(transformations))
@@ -83,6 +71,16 @@ def load_dataset(dataset_name, image_size, center_crop_size, dataroot, batch_siz
     # dataset = load_imagenet_subset(center_crop_size, image_size, dataroot, data_scale)
     dataset = load_imagenet_val_set(center_crop_size, image_size, dataroot, data_scale)
     n_classes = 1000
+  elif dataset_name == 'imagenet32':
+    # dataset = load_imagenet_subset(center_crop_size, image_size, dataroot, data_scale)
+    dataloader = load_imagenet_numpy(dataroot, batch_size, n_workers, test_set, img_hw=32)
+    n_classes = 1000
+    return dataloader, n_classes
+  elif dataset_name == 'imagenet64':
+    # dataset = load_imagenet_subset(center_crop_size, image_size, dataroot, data_scale)
+    dataloader = load_imagenet_numpy(dataroot, batch_size, n_workers, test_set, img_hw=64)
+    n_classes = 1000
+    return dataloader, n_classes
   else:
     raise ValueError(f'{dataset_name} not recognized')
 
@@ -149,8 +147,7 @@ def load_cifar10(image_size, dataroot, batch_size,
   return dataloader, n_classes
 
 
-def load_synth_dataset(data_file, batch_size, subset_size=None, to_tensor=False, shuffle=True,
-                       source_data_scale=None, target_data_scale=None):
+def load_synth_dataset(data_file, batch_size, subset_size=None, to_tensor=False, shuffle=True):
   if data_file.endswith('.npz'):  # allow for labels
     data_dict = np.load(data_file)
     data = data_dict['x']
@@ -166,33 +163,8 @@ def load_synth_dataset(data_file, batch_size, subset_size=None, to_tensor=False,
       random_subset = np.random.permutation(data_dict['x'].shape[0])[:subset_size]
       data = data[random_subset]
       targets = targets[random_subset] if targets is not None else None
-
-    # revert scaling if necessary
-    if target_data_scale is not None:
-      print(f'rescaling data of shape {data.shape} from {source_data_scale} to {target_data_scale}')
-      print(f'vals as loaded: {np.min(data)}, {np.max(data)}, {data.shape}')
-      assert source_data_scale is not None
-      assert target_data_scale == '0_1'
-      if source_data_scale == 'normed':
-        mean = np.asarray(IMAGENET_MEAN, dtype=np.float32)
-        sdev = np.asarray(IMAGENET_SDEV, dtype=np.float32)
-      elif source_data_scale == 'bounded':
-        mean = np.asarray([0.5, 0.5, 0.5], dtype=np.float32)
-        sdev = np.asarray([0.5, 0.5, 0.5], dtype=np.float32)
-      elif source_data_scale == 'normed05':
-        mean = np.asarray([0.5, 0.5, 0.5], dtype=np.float32)
-        sdev = np.asarray([0.5, 0.5, 0.5], dtype=np.float32)
-      elif source_data_scale == '0_1':
-        mean = np.asarray([0., 0., 0.], dtype=np.float32)
-        sdev = np.asarray([1., 1., 1.], dtype=np.float32)
-      else:
-        raise ValueError
-      data = data * sdev[None, :, None, None] + mean[None, :, None, None]
-      print(f'vals as rescaled: {np.min(data)}, {np.max(data)}, {data.shape}')
-
     synth_data = SynthDataset(data=data, targets=targets, to_tensor=to_tensor)
   else:  # old version
-    assert source_data_scale is None and target_data_scale is None
     data = np.load(data_file)
     if subset_size is not None:
       data = data[np.random.permutation(data.shape[0])[:subset_size]]
@@ -286,68 +258,6 @@ def small_data_loader(dataset_name, is_train):
     raise ValueError
 
 
-# class Imagenet32Dataset(pt.utils.data.Dataset):
-#   def __init__(self, data_root, transform=None, test_set=False):
-#     assert not test_set
-#     self.data_subdir = os.path.join(data_root, f'Imagenet32_{"val" if test_set else "train"}_npz')
-#     self.default_batch_len = 128116
-#     self.last_batch_len = 128123
-#     self.n_feats = 3072
-#     self.mm_offset = 128
-#     self.memmaps = []
-#     self.mean = np.load(os.path.join(self.data_subdir, 'train_data_means.npy')).reshape((3, 32, 32))
-#     self.transform = transform
-#     for data_batch_id in range(10):
-#       len_batch = self.default_batch_len if data_batch_id < 9 else self.last_batch_len
-#
-#       x_map = np.memmap(os.path.join(self.data_subdir, f'train_data_batch_{data_batch_id}_x.npy'),
-#                         dtype=np.uint8, mode='r', shape=(len_batch, 3, 32, 32),
-#                         offset=self.mm_offset)
-#       y_map = np.memmap(os.path.join(self.data_subdir, f'train_data_batch_{data_batch_id}_y.npy'),
-#                         dtype=np.uint8, mode='r', shape=(len_batch,),
-#                         offset=self.mm_offset)
-#       self.memmaps.append((x_map, y_map))
-#
-#   @staticmethod
-#   def npz_to_npy_batches():
-#     for data_id in range(1, 11):
-#       data = np.load(f'../data/Imagenet32_train_npz/train_data_batch_{data_id}.npz')
-#       np.save(f'../data/Imagenet32_train_npz/train_data_batch_{data_id-1}_x.npy', data['data'])
-#       np.save(f'../data/Imagenet32_train_npz/train_data_batch_{data_id-1}_y.npy', data['labels']-1)
-#       if data_id == 1:
-#         np.save(f'../data/Imagenet32_train_npz/train_data_means.npy', data['mean'])
-#
-#     data = np.load(f'../data/Imagenet32_val_npz/val_data.npz')
-#     np.save(f'../data/Imagenet32_val_npz/val_data_x.npy', data['data'])
-#     np.save(f'../data/Imagenet32_val_npz/val_data_y.npy', data['labels'] - 1)
-#
-#   def __len__(self):
-#     return self.default_batch_len * 9 + self.last_batch_len
-#
-#   def __getitem__(self, idx):
-#     batch_id = idx // self.default_batch_len
-#     sample_id = idx % self.default_batch_len
-#     if batch_id == 10:
-#       batch_id = 9
-#       sample_id += self.default_batch_len
-#     x_map, y_map = self.memmaps[batch_id]
-#     x, y = x_map[sample_id].copy(), y_map[sample_id].copy()
-#     x = pt.tensor(x, dtype=pt.float) / 255
-#     if self.transform:
-#       x = self.transform(x)
-#     return x, y
-#
-#
-# def load_imagenet_32(data_root, batch_size, workers, test_set=False):
-#   transform = transforms.Compose([transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
-#   # transform = None
-#   dataset = Imagenet32Dataset(data_root, transform, test_set)
-#   # Create the dataloader
-#   dataloader = pt.utils.data.DataLoader(dataset, batch_size=batch_size,
-#                                         shuffle=True, num_workers=workers)
-#   return dataloader
-
-
 class ImagenetNumpyDataset(pt.utils.data.Dataset):
   def __init__(self, data_root, transform=None, test_set=False, img_hw=32, load_to_memory=True):
     assert not test_set
@@ -428,3 +338,8 @@ def load_imagenet_numpy(data_root, batch_size, workers, test_set=False, img_hw=3
   dataloader = pt.utils.data.DataLoader(dataset, batch_size=batch_size,
                                         shuffle=True, num_workers=workers)
   return dataloader
+
+
+if __name__ == '__main__':
+  # ImagenetNumpyDataset(data_root='../data/', img_hw=64, load_to_memory=True)
+  ImagenetNumpyDataset.npz_to_npy_batches('../data/Imagenet64_train_npz', val_data_root=None)

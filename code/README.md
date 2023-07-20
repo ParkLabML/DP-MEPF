@@ -1,6 +1,5 @@
 # dp-mepf code
 
-This refactored implementation of our method computes 
 
 ## code structure
 

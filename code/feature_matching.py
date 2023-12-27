@@ -8,40 +8,6 @@ from data_loading import load_dataset
 from encoders_class import Encoders
 
 
-def regular_match_loss(fake_moment, real_moment, fake_m_avg, m_avg_alpha):
-  if fake_m_avg is None:
-    fake_m_avg = fake_moment.clone().detach()
-  fake_m_avg = (1.0 - m_avg_alpha) * fake_m_avg.detach() + m_avg_alpha * fake_moment
-  loss = mse_loss(fake_m_avg, real_moment.detach())
-  return loss, fake_m_avg
-
-
-def regular_moving_average_update(m_avg, m_avg_alpha, feat_emb, acc_losses, optimizer_g,
-                                  matched_moments):
-
-  fake_data_feat_mean = reduce_feats_list_or_tensor(lambda x: pt.mean(x, dim=0), feat_emb.fake_feats)
-  mean_loss, m_avg.mean = regular_match_loss(fake_data_feat_mean, feat_emb.real_means,
-                                             m_avg.mean, m_avg_alpha)
-
-  if matched_moments == 'mean':
-    var_loss = 0.
-  elif matched_moments == 'mean_and_var':
-    fake_data_feat_var = reduce_feats_list_or_tensor(var_reduce_op, feat_emb.fake_feats_sqrd)
-    var_loss, m_avg.var = regular_match_loss(fake_data_feat_var, feat_emb.real_vars,
-                                             m_avg.var, m_avg_alpha)
-  else:
-    fake_data_feat_var = reduce_feats_list_or_tensor(lambda x: pt.mean(x, dim=0),
-                                                     feat_emb.fake_feats_sqrd)
-    var_loss, m_avg.var = regular_match_loss(fake_data_feat_var, feat_emb.real_vars,
-                                             m_avg.var, m_avg_alpha)
-
-  loss_net_g = mean_loss + var_loss
-
-  acc_losses.gen_mean += loss_net_g.item()
-  loss_net_g.backward()
-  optimizer_g.step()
-
-
 def adam_match_loss(moment_net, fake_moment, real_moment, avg_loss_net_mom, opt_moment,
                     avg_loss_net_gen):
   moment_diff_m_avg = moment_net(None)
@@ -354,8 +320,6 @@ def l2_norm_feat_analysis(feat_mean, feat_vars, n_feats_by_layer, layer_feats, w
   assert 1 % 1 == 1
 
 
-
-
 def hybrid_labeled_batch_embedding(encoders, feats_batch, feats_batch_sqrd, l2_norms,
                                    do_second_moment, n_classes, y_one_hot):
   # ef_res = extract_and_bound_features(x_in, encoders, n_matching_layers, match_with_top_layers,
@@ -494,27 +458,6 @@ def get_test_data_embedding(net_enc, n_matching_layers, device,
                                    matched_moments, n_classes)
   test_feat_means, test_feat_vars, _, _ = emb_res
   return test_feat_means, test_feat_vars
-
-
-def regular_moving_average_valid(feat_emb, m_avg, m_avg_alpha, acc_losses, matched_moments):
-
-  fake_data_feat_mean = reduce_feats_list_or_tensor(lambda x: pt.mean(x, dim=0),
-                                                    feat_emb.fake_feats)
-  mean_loss, m_avg.mean = regular_match_loss(fake_data_feat_mean, feat_emb.real_means,
-                                             m_avg.mean, m_avg_alpha)
-
-  if matched_moments == 'mean':
-    var_loss = 0.
-  elif matched_moments == 'mean_and_var':
-    fake_data_feat_var = reduce_feats_list_or_tensor(var_reduce_op, feat_emb.fake_feats_sqrd)
-    var_loss, m_avg.var = regular_match_loss(fake_data_feat_var, feat_emb.real_vars,
-                                             m_avg.var, m_avg_alpha)
-  else:
-    fake_data_feat_var = reduce_feats_list_or_tensor(lambda x: pt.mean(x, dim=0),
-                                                     feat_emb.fake_feats_sqrd)
-    var_loss, m_avg.var = regular_match_loss(fake_data_feat_var, feat_emb.real_vars,
-                                             m_avg.var, m_avg_alpha)
-  acc_losses.gen_mean += (mean_loss + var_loss).item()
 
 
 def adam_moving_average_valid(feat_emb, acc_losses, m_avg, optimizers, matched_moments):

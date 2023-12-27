@@ -82,8 +82,8 @@ def get_args():
                       choices=['debug', 'info', 'warning'],
                       help="minimum importance leven at which to display messages")
   parser.add_argument('--tensorboard_log_iter', type=int, default=100, help="log every n steps")
-  parser.add_argument('--restart_iter', type=int, default=100_000,
-                      help="Number of batches after which the model is saved into a NEW file.")
+  parser.add_argument('--restart_iter', type=int, default=None,
+                      help="steps after which to terminate with exit code 3. None for no such restarts")
   parser.add_argument('--new_ckpt_iter', type=int, default=500_000,
                       help="Number of batches after which the model is saved into a NEW file.")
   parser.add_argument('--ckpt_iter', type=int, default=10_000,
@@ -144,8 +144,6 @@ def get_args():
                       help='Number of layers of the feature extractor used for feature matching')
   parser.add_argument('--match_with_top_layers', action='store_true',
                       help="Uses top <--n_matching_layers> layers to perform feature matching.")
-  parser.add_argument('--m_avg_alpha', type=float, default=1.0,
-                      help='Term used to balance the trade-off in the regular moving average.')
   parser.add_argument('--m_avg_lr', type=float, default=1e-5,
                       help='Learning rate for moving average, default=0.0002')
   parser.add_argument('--n_classes_in_enc', type=int, default=1_000,

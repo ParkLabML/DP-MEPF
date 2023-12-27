@@ -46,16 +46,16 @@ Below we only list one nonprivate and one private run for each dataset. the othe
 
 
 #### CelebA 32x32
-`python3.9 dp_mepf.py --n_iter 200_000 --ckpt_iter 10_000 --restart_iter 210_000 --syn_eval_iter 5_000 --dataset celeba --gen_output tanh --keep_best_syn_data --exp_name may28_tanh_celeba32_res/run_162 --image_size 32 --dp_val_noise_scaling 10. --batch_size 128 --extra_input_scaling imagenet_norm --matched_moments mean --dp_tgt_eps 1. --lr 3e-4 --m_avg_lr 1e-4 --seed 1`
+`python3.9 dp_mepf.py --n_iter 200_000 --ckpt_iter 10_000 --syn_eval_iter 5_000 --dataset celeba --gen_output tanh --keep_best_syn_data --exp_name may28_tanh_celeba32_res/run_162 --image_size 32 --dp_val_noise_scaling 10. --batch_size 128 --extra_input_scaling imagenet_norm --matched_moments mean --dp_tgt_eps 1. --lr 3e-4 --m_avg_lr 1e-4 --seed 1`
 
 #### CelebA 64x64
-`python3.9 dp_mepf.py --n_iter 200_000 --ckpt_iter 10_000 --restart_iter 210_000 --syn_eval_iter 5_000 --dataset celeba --gen_output tanh --keep_best_syn_data --exp_name may29_tanh_celeba64_res_mean/run_0 --image_size 64 --dp_val_noise_scaling 10. --batch_size 128 --extra_input_scaling imagenet_norm  --matched_moments mean --dp_tgt_eps 1. --lr 3e-4 --m_avg_lr 3e-4 --seed 1`
+`python3.9 dp_mepf.py --n_iter 200_000 --ckpt_iter 10_000 --syn_eval_iter 5_000 --dataset celeba --gen_output tanh --keep_best_syn_data --exp_name may29_tanh_celeba64_res_mean/run_0 --image_size 64 --dp_val_noise_scaling 10. --batch_size 128 --extra_input_scaling imagenet_norm  --matched_moments mean --dp_tgt_eps 1. --lr 3e-4 --m_avg_lr 3e-4 --seed 1`
 
 #### Cifar10 - labeled
-`python3.9 dp_mepf.py --n_iter 200_000 --ckpt_iter 20_000 --restart_iter 210_000 --syn_eval_iter 5_000 --dataset cifar10 --gen_output tanh --keep_best_syn_data --labeled --exp_name jun2_tanh_cifar10_labeled_res_mean/run_0 --dp_val_noise_scaling 10. --batch_size 128 --extra_input_scaling imagenet_norm --matched_moments mean --dp_tgt_eps 1. --lr 1e-3 --m_avg_lr 1e-4 --seed 1`
+`python3.9 dp_mepf.py --n_iter 200_000 --ckpt_iter 20_000 --syn_eval_iter 5_000 --dataset cifar10 --gen_output tanh --keep_best_syn_data --labeled --exp_name jun2_tanh_cifar10_labeled_res_mean/run_0 --dp_val_noise_scaling 10. --batch_size 128 --extra_input_scaling imagenet_norm --matched_moments mean --dp_tgt_eps 1. --lr 1e-3 --m_avg_lr 1e-4 --seed 1`
 
 #### Cifar10 - unlabeled
-`python3.9 dp_mepf.py --n_iter 200_000 --ckpt_iter 20_000 --restart_iter 210_000 --syn_eval_iter 5_000 --dataset cifar10 --gen_output tanh --keep_best_syn_data --exp_name may26_tanh_cifar10_res_unlabeled/run_0 --matched_moments mean --dp_val_noise_scaling 10. --batch_size 128 --extra_input_scaling imagenet_norm --lr 1e-3 --m_avg_lr 1e-3 --dp_tgt_eps 1. --seed 1`
+`python3.9 dp_mepf.py --n_iter 200_000 --ckpt_iter 20_000 --syn_eval_iter 5_000 --dataset cifar10 --gen_output tanh --keep_best_syn_data --exp_name may26_tanh_cifar10_res_unlabeled/run_0 --matched_moments mean --dp_val_noise_scaling 10. --batch_size 128 --extra_input_scaling imagenet_norm --lr 1e-3 --m_avg_lr 1e-3 --dp_tgt_eps 1. --seed 1`
 
 #### MNIST / FashionMNIST
 This version of the code was corrected and refactored after we found an error in our FID evaluation. As a result, (Fashion)MNIST experiments, which were not affected by the error, have not been tested with this new version. To reproduce our results on those datasets, use our old implementation in `old_code`. 

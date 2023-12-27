@@ -445,13 +445,13 @@ def sum_feats_by_label(feats, feats_sqrd, l2_batch, y_one_hot):
 
 def get_test_data_embedding(net_enc, n_matching_layers, device,
                             channel_ids_by_enc, match_with_top_layers,
-                            dp_params, matched_moments, data_scale,
+                            dp_params, matched_moments,
                             n_classes, dataset, image_size, center_crop_size, dataroot,
                             batch_size, n_workers, labeled, val_data):
   assert val_data in {'train', 'test'}
   use_test_set = val_data == 'test'
   test_loader, _ = load_dataset(dataset, image_size, center_crop_size, dataroot,
-                                batch_size, n_workers, data_scale, labeled,
+                                batch_size, n_workers, labeled,
                                 test_set=use_test_set)
   emb_res = compute_data_embedding(net_enc, n_matching_layers, device, test_loader, None,
                                    channel_ids_by_enc, dp_params, match_with_top_layers,

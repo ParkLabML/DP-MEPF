@@ -68,7 +68,7 @@ def evaluate(model, loaders, device, lr_tta=False):
   return accs['test'], accs['train']
 
 
-def synth_to_real_test(device, synth_data_file, data_scale):
+def synth_to_real_test(device, synth_data_file):
   batch_size = 512
   epochs = 10  # 24
   lr = 0.5
@@ -78,7 +78,7 @@ def synth_to_real_test(device, synth_data_file, data_scale):
   label_smoothing = 0.1
   lr_tta = True
   synth_loader = load_synth_dataset(synth_data_file, batch_size, to_tensor=True)
-  test_loader, _ = load_cifar10(32, '../data', batch_size, 2, data_scale, labeled=True, test_set=True)
+  test_loader, _ = load_cifar10(32, '../data', batch_size, 2, labeled=True, test_set=True)
   loaders = {'train': synth_loader, 'test': test_loader}
   # loaders = {'test': synth_loader, 'train': test_loader}
   model = get_ffcv_model(device)
@@ -89,27 +89,28 @@ def synth_to_real_test(device, synth_data_file, data_scale):
 
 
 def main():
+  pass
   # parser = ArgumentParser(description='Fast CIFAR-10 training')
-  batch_size = 512
-  epochs = 10  # 24
-  lr = 0.5
-  momentum = 0.9
-  lr_peak_epoch = 5
-  weight_decay = 5e-4
-  label_smoothing = 0.1
-  lr_tta = True
-  device = 0 if pt.cuda.is_available() else 'cpu'
-  # loaders, start_time = make_dataloaders(batch_size)
-  tanh_out = False
-  train_loader, _ = load_cifar10(32, '../data', batch_size, 2, tanh_out, labeled=True,
-                                 test_set=False)
-  test_loader, _ = load_cifar10(32, '../data', batch_size, 2, tanh_out, labeled=True, test_set=True)
-  loaders = {'train': train_loader, 'test': test_loader}
-  model = get_ffcv_model(device)
-  train(model, loaders, device, lr, epochs, label_smoothing, momentum, weight_decay, lr_peak_epoch)
-  test_acc, train_acc = evaluate(model, loaders, device, lr_tta)
-  print(f'train accuracy: {train_acc:.1f}%')
-  print(f'test accuracy: {test_acc:.1f}%')
+  # batch_size = 512
+  # epochs = 10  # 24
+  # lr = 0.5
+  # momentum = 0.9
+  # lr_peak_epoch = 5
+  # weight_decay = 5e-4
+  # label_smoothing = 0.1
+  # lr_tta = True
+  # device = 0 if pt.cuda.is_available() else 'cpu'
+  # # loaders, start_time = make_dataloaders(batch_size)
+  # tanh_out = False
+  # train_loader, _ = load_cifar10(32, '../data', batch_size, 2, tanh_out, labeled=True,
+  #                                test_set=False)
+  # test_loader, _ = load_cifar10(32, '../data', batch_size, 2, tanh_out, labeled=True, test_set=True)
+  # loaders = {'train': train_loader, 'test': test_loader}
+  # model = get_ffcv_model(device)
+  # train(model, loaders, device, lr, epochs, label_smoothing, momentum, weight_decay, lr_peak_epoch)
+  # test_acc, train_acc = evaluate(model, loaders, device, lr_tta)
+  # print(f'train accuracy: {train_acc:.1f}%')
+  # print(f'test accuracy: {test_acc:.1f}%')
 
 
 if __name__ == "__main__":

@@ -86,12 +86,12 @@ class PRDCEval:
 
 
 def get_prdc(synth_data_file, batch_size, n_samples, dataset_name, image_size,
-             center_crop_size, data_scale, dataroot='../data',
+             center_crop_size, dataroot='../data',
              nearest_k=5, max_n_samples=10_000, skip_pr=False, pretrained=False,
              reduced_embedding=False, device='cpu'):
   fake_data_loader = load_synth_dataset(synth_data_file, batch_size, n_samples)
   real_data_loader, _ = load_dataset(dataset_name, image_size, center_crop_size, dataroot,
-                                     batch_size, n_workers=1, data_scale=data_scale, labeled=False,
+                                     batch_size, n_workers=1, labeled=False,
                                      test_set=False)
   prdc_evaluator = PRDCEval(pretrained, reduced_embedding, device)
   return prdc_evaluator.eval(real_data_loader, fake_data_loader, nearest_k, max_n_samples, skip_pr)

@@ -37,7 +37,7 @@ def store_imagenet32_stats():
   np.savez(real_data_stats_file, mu=mu_real, sig=sig_real)
 
 
-def store_data_stats(dataset_name, image_size, center_crop_size, dataroot, data_scale):
+def store_data_stats(dataset_name, image_size, center_crop_size, dataroot):
   log_dir = '../data'
   device = pt.device("cuda")
   batch_size = 50
@@ -46,57 +46,28 @@ def store_data_stats(dataset_name, image_size, center_crop_size, dataroot, data_
   os.makedirs(real_data_stats_dir, exist_ok=True)
 
   real_data_stats_file = os.path.join(real_data_stats_dir,
-                                      embedding_file(dataset_name, image_size, data_scale))
+                                      embedding_file(dataset_name, image_size))
   block_idx = InceptionV3.BLOCK_INDEX_BY_DIM[2048]
   model = InceptionV3([block_idx]).to(device)
   # mu_real, sig_real = cifar10_stats(model, device, batch_size, workers,
   #                                   image_size=32, dataroot='../data')
   dataloader, _ = load_dataset(dataset_name, image_size, center_crop_size, dataroot,
-                               batch_size, workers, data_scale, labeled=False,
-                               test_set=False)
+                               batch_size, workers, labeled=False, test_set=False)
   mu_real, sig_real = stats_from_dataloader(dataloader, model, device)
   np.savez(real_data_stats_file, mu=mu_real, sig=sig_real)
 
 
-def embedding_file(dataset_name, image_size, data_scale):
+def embedding_file(dataset_name, image_size, data_scale='0_1'):
   scale_str = '' if data_scale is None else f'_{data_scale}'
   return f'{dataset_name}_{image_size}{scale_str}.npz'
 
 
-def get_fid_scores_err(synth_data_file, dataset_name, device, n_samples,
-                   image_size, center_crop_size, data_scale,
-                   base_data_dir='../data', batch_size=50):
-  real_data_stats_dir = os.path.join(base_data_dir, 'fid_stats')
-  real_data_stats_file = os.path.join(real_data_stats_dir,
-                                      embedding_file(dataset_name, image_size, data_scale))
-  dims = 2048
-
-  block_idx = InceptionV3.BLOCK_INDEX_BY_DIM[dims]
-
-  model = InceptionV3([block_idx]).to(device)
-
-  if not os.path.exists(real_data_stats_file):
-    print(f'fid stats not found at {real_data_stats_file}. computing new stats')
-    store_data_stats(dataset_name, image_size, center_crop_size, base_data_dir, data_scale)
-
-  stats = np.load(real_data_stats_file)
-  mu_real, sig_real = stats['mu'], stats['sig']
-
-  print('computing synth data stats')
-  synth_data_loader = load_synth_dataset(synth_data_file, batch_size, n_samples)
-  mu_syn, sig_syn = stats_from_dataloader(synth_data_loader, model, device)
-
-  fid = calculate_frechet_distance(mu_real, sig_real, mu_syn, sig_syn)
-  return fid
-
-
 def get_fid_scores_fixed(synth_data_file, dataset_name, device, n_samples,
-                   image_size, center_crop_size, data_scale,
-                   base_data_dir='../data', batch_size=50):
+                         image_size, center_crop_size,
+                         base_data_dir='../data', batch_size=50):
   real_data_stats_dir = os.path.join(base_data_dir, 'fid_stats')
-  target_data_scale = '0_1'
   real_data_stats_file = os.path.join(real_data_stats_dir,
-                                      embedding_file(dataset_name, image_size, target_data_scale))
+                                      embedding_file(dataset_name, image_size))
   dims = 2048
 
   block_idx = InceptionV3.BLOCK_INDEX_BY_DIM[dims]
@@ -104,14 +75,12 @@ def get_fid_scores_fixed(synth_data_file, dataset_name, device, n_samples,
   model = InceptionV3([block_idx], normalize_input=True).to(device)
 
   if not os.path.exists(real_data_stats_file):
-    store_data_stats(dataset_name, image_size, center_crop_size, base_data_dir, target_data_scale)
+    store_data_stats(dataset_name, image_size, center_crop_size, base_data_dir)
 
   stats = np.load(real_data_stats_file)
   mu_real, sig_real = stats['mu'], stats['sig']
 
-  synth_data_loader = load_synth_dataset(synth_data_file, batch_size, n_samples,
-                                         source_data_scale=data_scale,
-                                         target_data_scale=target_data_scale)
+  synth_data_loader = load_synth_dataset(synth_data_file, batch_size, n_samples)
   mu_syn, sig_syn = stats_from_dataloader(synth_data_loader, model, device)
 
   fid = calculate_frechet_distance(mu_real, sig_real, mu_syn, sig_syn)

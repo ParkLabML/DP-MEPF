@@ -179,7 +179,7 @@ def delayed_log(level, message):
 
 def log_synth_data_eval(net_gen, writer, step, noise_maker, device, dataset, synth_dataset_size,
                         batch_size, log_dir, n_classes, fid_dataset_size, image_size,
-                        center_crop_size, data_scale, local_fid_eval_storage, skip_prdc, final_step):
+                        center_crop_size, local_fid_eval_storage, skip_prdc, final_step):
   return_score = None
 
   if final_step:
@@ -209,10 +209,9 @@ def log_synth_data_eval(net_gen, writer, step, noise_maker, device, dataset, syn
 
   if dataset in {'cifar10', 'celeba', 'lsun'}:  # skip for mnist
     LOG.info(f'FID eval')
-    # fid_score = get_fid_scores(syn_data_file, dataset, device, fid_dataset_size,
-    #                            image_size, center_crop_size, data_scale, batch_size=batch_size)
+
     fid_score = get_fid_scores_fixed(syn_data_file, dataset, device, fid_dataset_size,
-                                     image_size, center_crop_size, data_scale, batch_size=batch_size)
+                                     image_size, center_crop_size, batch_size=batch_size)
 
     np.save(os.path.join(log_dir, fid_file_name), fid_score)
     if writer is not None:
@@ -230,7 +229,7 @@ def log_synth_data_eval(net_gen, writer, step, noise_maker, device, dataset, syn
       prdc_batch_size = 100
       prdc_n_samples = 10_000
       prdc_dict = get_prdc(syn_data_file, prdc_batch_size, prdc_n_samples, dataset,
-                           image_size, center_crop_size, data_scale,
+                           image_size, center_crop_size,
                            nearest_k=5, skip_pr=False, pretrained=pretrained, device=device)
       score_ser['precision'] = prdc_dict['precision']
       score_ser['recall'] = prdc_dict['recall']
@@ -244,7 +243,7 @@ def log_synth_data_eval(net_gen, writer, step, noise_maker, device, dataset, syn
   if n_classes is not None:
     LOG.info(f'classifier eval')
     if dataset == 'cifar10':
-      test_acc, train_acc = synth_to_real_test(device, syn_data_file, data_scale)
+      test_acc, train_acc = synth_to_real_test(device, syn_data_file)
       np.savez(os.path.join(log_dir, acc_file_name),
                test_acc=test_acc, train_acc=train_acc)
 

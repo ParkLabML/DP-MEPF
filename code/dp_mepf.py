@@ -27,7 +27,7 @@ def get_real_data_embedding(ckpt, encoders, n_matching_layers, device, train_loa
                             channel_ids_by_enc, dp_params,
                             match_with_top_layers, matched_moments, n_classes, feat_emb,
                             dataset, image_size, center_crop_size, dataroot,
-                            batch_size, n_workers, data_scale,
+                            batch_size, n_workers,
                             val_encoders, val_data, val_dp_params, val_moments,
                             do_embedding_norms_analysis=False):
   if ckpt is None:  # compute true data embeddings
@@ -52,7 +52,7 @@ def get_real_data_embedding(ckpt, encoders, n_matching_layers, device, train_loa
     labeled_val = False
     test_emb = get_test_data_embedding(val_encoders, n_matching_layers, device,
                                        channel_ids_by_enc, match_with_top_layers,
-                                       val_dp_params, val_moments, data_scale, n_classes_val,
+                                       val_dp_params, val_moments, n_classes_val,
                                        dataset, image_size, center_crop_size, dataroot,
                                        batch_size, n_workers, labeled_val, val_data)
     feat_emb.means_valid, feat_emb.vars_valid = test_emb
@@ -161,11 +161,10 @@ def load_best_result(best_result: BestResult, best_proxy_result: BestResult, ckp
     best_proxy_result.data_file = ckpt['best_proxy_syn_data_file']
 
 
-def get_enc_input_scalings(net_enc_type, dataset, image_size, data_scale, extra_input_scaling):
+def get_enc_input_scalings(net_enc_type, dataset, image_size, extra_input_scaling):
   if extra_input_scaling == 'none':
     return None
 
-  assert data_scale == '0_1'
   scalings_by_dataset = {'imagenet': '0_1_to_IMGNet_Norm',
                          'cifar10': '0_1_to_Cifar10_Norm',
                          'celeba32': '0_1_to_Celeba32_Norm',
@@ -233,12 +232,11 @@ def main():
     train_loader = None
   else:
     train_loader, n_classes = load_dataset(arg.dataset, arg.image_size, arg.center_crop_size,
-                                           arg.dataroot, arg.batch_size, arg.n_workers,
-                                           arg.data_scale, arg.labeled)
+                                           arg.dataroot, arg.batch_size, arg.n_workers, arg.labeled)
     n_features_in_enc = None
 
   train_enc_input_scalings = get_enc_input_scalings(arg.net_enc_type, arg.dataset, arg.image_size,
-                                                    arg.data_scale, arg.extra_input_scaling)
+                                                    arg.extra_input_scaling)
 
   encoders = get_torchvision_encoders(arg.net_enc_type, arg.image_size, device,
                                       arg.pretrain_dataset, arg.n_classes_in_enc,
@@ -279,7 +277,7 @@ def main():
                           arg.match_with_top_layers, arg.matched_moments, n_classes, feat_emb,
                           arg.dataset, arg.image_size, arg.center_crop_size, arg.dataroot,
                           arg.batch_size, arg.n_workers,
-                          arg.data_scale, val_encoders, arg.val_data, val_dp_params, val_moments,
+                          val_encoders, arg.val_data, val_dp_params, val_moments,
                           arg.do_embedding_norms_analysis)
 
   m_avg = MovingAverages()
@@ -307,12 +305,6 @@ def main():
 
     gen_noise, gen_labels = noise_maker.generator_noise()
     fake_data = gen(gen_noise)
-
-    if arg.pretrain_dataset == 'imagenet' and arg.gen_output == 'tanh' \
-        and arg.data_scale == 'normed':
-      # normalizes the generated images using imagenet min-max ranges
-      imagenet_norm_min, imagenet_norm_range = get_imagenet_norm_min_and_range(device)
-      fake_data = (((fake_data + 1) * imagenet_norm_range) / 2) + imagenet_norm_min
 
     # extract features from FAKE data
     feat_emb = get_fake_data_embedding(fake_data, encoders, feat_emb, dp_params, gen_labels,
@@ -345,7 +337,7 @@ def main():
                                                       arg.batch_size, arg.log_dir,
                                                       n_classes, arg.fid_dataset_size,
                                                       arg.image_size, arg.center_crop_size,
-                                                      arg.data_scale, arg.local_fid_eval_storage, arg.skip_prdc,
+                                                      arg.local_fid_eval_storage, arg.skip_prdc,
                                                       final_step=False)
 
       update_best_score(eval_score, step, syn_data_file, arg.dataset, best_result)
@@ -372,7 +364,7 @@ def main():
                                                     device, arg.dataset, arg.synth_dataset_size,
                                                     arg.batch_size, arg.log_dir, n_classes,
                                                     arg.fid_dataset_size, arg.image_size,
-                                                    arg.center_crop_size, arg.data_scale,
+                                                    arg.center_crop_size,
                                                     arg.local_fid_eval_storage, arg.skip_prdc, final_step=True)
     update_best_score(eval_score, arg.n_iter, syn_data_file, arg.dataset, best_result)
 

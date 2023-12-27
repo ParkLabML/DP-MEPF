@@ -20,21 +20,8 @@ def shift_data_transform(x):
   return 2 * x - 1
 
 
-def scale_transform(data_scale):
-  if data_scale == 'normed':
-    return transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_SDEV)
-  elif data_scale == 'bounded':
-    return transforms.Lambda(shift_data_transform)
-  elif data_scale == 'normed05':
-    return transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
-  elif data_scale == '0_1':
-    return transforms.Normalize(mean=[0., 0., 0.], std=[1., 1., 1.])
-  else:
-    raise ValueError
-
-
 def load_dataset(dataset_name, image_size, center_crop_size, dataroot, batch_size,
-                 n_workers, data_scale, labeled=False, test_set=False):
+                 n_workers, labeled=False, test_set=False):
 
   if dataset_name in ['celeba']:
     n_classes = None
@@ -46,7 +33,7 @@ def load_dataset(dataset_name, image_size, center_crop_size, dataroot, batch_siz
       transformations.extend([transforms.Resize(image_size),
                               transforms.CenterCrop(center_crop_size)])
 
-    transformations.extend([transforms.ToTensor(), scale_transform(data_scale)])
+    transformations.extend([transforms.ToTensor()])
 
     # folder dataset
     dataset = dset.ImageFolder(root=os.path.join(dataroot, 'img_align_celeba'),
@@ -61,18 +48,17 @@ def load_dataset(dataset_name, image_size, center_crop_size, dataroot, batch_siz
       transformations.extend([transforms.Resize(image_size),
                               transforms.CenterCrop(center_crop_size)])
 
-    transformations.extend([transforms.ToTensor(), scale_transform(data_scale)])
+    transformations.extend([transforms.ToTensor()])
 
     dataset = dset.LSUN(os.path.join(dataroot, 'lsun'), classes=['bedroom_train'],
                         transform=transforms.Compose(transformations))
 
   elif dataset_name == 'cifar10':
-    return load_cifar10(image_size, dataroot, batch_size, n_workers, data_scale, labeled, test_set)
+    return load_cifar10(image_size, dataroot, batch_size, n_workers, labeled, test_set)
 
   elif dataset_name == 'stl10':
     n_classes = None
-    transformations = [transforms.Resize(image_size), transforms.ToTensor(),
-                       scale_transform(data_scale)]
+    transformations = [transforms.Resize(image_size), transforms.ToTensor()]
 
     dataset = dset.STL10(root=dataroot, split='unlabeled', download=True,
                          transform=transforms.Compose(transformations))
@@ -80,8 +66,7 @@ def load_dataset(dataset_name, image_size, center_crop_size, dataroot, batch_siz
     dataset = small_data_loader(dataset_name, not test_set)
     n_classes = 10
   elif dataset_name == 'imagenet':
-    # dataset = load_imagenet_subset(center_crop_size, image_size, dataroot, data_scale)
-    dataset = load_imagenet_val_set(center_crop_size, image_size, dataroot, data_scale)
+    dataset = load_imagenet_val_set(center_crop_size, image_size, dataroot)
     n_classes = 1000
   else:
     raise ValueError(f'{dataset_name} not recognized')
@@ -99,7 +84,7 @@ def load_dataset(dataset_name, image_size, center_crop_size, dataroot, batch_siz
   return dataloader, n_classes
 
 
-def load_imagenet_subset(center_crop_size, image_size, dataroot, data_scale):
+def load_imagenet_subset(center_crop_size, image_size, dataroot):
   transformations = []
 
   if center_crop_size > image_size:
@@ -109,7 +94,7 @@ def load_imagenet_subset(center_crop_size, image_size, dataroot, data_scale):
     transformations.extend([transforms.Resize(image_size),
                             transforms.CenterCrop(center_crop_size)])
 
-  transformations.extend([transforms.ToTensor(), scale_transform(data_scale)])
+  transformations.extend([transforms.ToTensor()])
 
   # folder dataset
   dataset = dset.ImageFolder(root=os.path.join(dataroot, 'imagenet'),
@@ -117,7 +102,7 @@ def load_imagenet_subset(center_crop_size, image_size, dataroot, data_scale):
   return dataset
 
 
-def load_imagenet_val_set(center_crop_size, image_size, dataroot, data_scale):
+def load_imagenet_val_set(center_crop_size, image_size, dataroot):
   transformations = []
 
   if center_crop_size > image_size:
@@ -127,7 +112,7 @@ def load_imagenet_val_set(center_crop_size, image_size, dataroot, data_scale):
     transformations.extend([transforms.Resize(image_size),
                             transforms.CenterCrop(center_crop_size)])
 
-  transformations.extend([transforms.ToTensor(), scale_transform(data_scale)])
+  transformations.extend([transforms.ToTensor()])
 
   # folder dataset
   dataset = dset.ImageFolder(root=os.path.join(dataroot, 'imagenet_val'),
@@ -136,9 +121,8 @@ def load_imagenet_val_set(center_crop_size, image_size, dataroot, data_scale):
 
 
 def load_cifar10(image_size, dataroot, batch_size,
-                 n_workers, data_scale, labeled=False, test_set=False):
-  transformations = [transforms.Resize(image_size), transforms.ToTensor(),
-                     scale_transform(data_scale)]
+                 n_workers, labeled=False, test_set=False):
+  transformations = [transforms.Resize(image_size), transforms.ToTensor()]
   dataset = dset.CIFAR10(root=dataroot, train=not test_set, download=True,
                          transform=transforms.Compose(transformations))
 
@@ -149,8 +133,7 @@ def load_cifar10(image_size, dataroot, batch_size,
   return dataloader, n_classes
 
 
-def load_synth_dataset(data_file, batch_size, subset_size=None, to_tensor=False, shuffle=True,
-                       source_data_scale=None, target_data_scale=None):
+def load_synth_dataset(data_file, batch_size, subset_size=None, to_tensor=False, shuffle=True):
   if data_file.endswith('.npz'):  # allow for labels
     data_dict = np.load(data_file)
     data = data_dict['x']
@@ -167,32 +150,8 @@ def load_synth_dataset(data_file, batch_size, subset_size=None, to_tensor=False,
       data = data[random_subset]
       targets = targets[random_subset] if targets is not None else None
 
-    # revert scaling if necessary
-    if target_data_scale is not None:
-      print(f'rescaling data of shape {data.shape} from {source_data_scale} to {target_data_scale}')
-      print(f'vals as loaded: {np.min(data)}, {np.max(data)}, {data.shape}')
-      assert source_data_scale is not None
-      assert target_data_scale == '0_1'
-      if source_data_scale == 'normed':
-        mean = np.asarray(IMAGENET_MEAN, dtype=np.float32)
-        sdev = np.asarray(IMAGENET_SDEV, dtype=np.float32)
-      elif source_data_scale == 'bounded':
-        mean = np.asarray([0.5, 0.5, 0.5], dtype=np.float32)
-        sdev = np.asarray([0.5, 0.5, 0.5], dtype=np.float32)
-      elif source_data_scale == 'normed05':
-        mean = np.asarray([0.5, 0.5, 0.5], dtype=np.float32)
-        sdev = np.asarray([0.5, 0.5, 0.5], dtype=np.float32)
-      elif source_data_scale == '0_1':
-        mean = np.asarray([0., 0., 0.], dtype=np.float32)
-        sdev = np.asarray([1., 1., 1.], dtype=np.float32)
-      else:
-        raise ValueError
-      data = data * sdev[None, :, None, None] + mean[None, :, None, None]
-      print(f'vals as rescaled: {np.min(data)}, {np.max(data)}, {data.shape}')
-
     synth_data = SynthDataset(data=data, targets=targets, to_tensor=to_tensor)
   else:  # old version
-    assert source_data_scale is None and target_data_scale is None
     data = np.load(data_file)
     if subset_size is not None:
       data = data[np.random.permutation(data.shape[0])[:subset_size]]
